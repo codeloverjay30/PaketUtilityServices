@@ -50,46 +50,70 @@ public class CpmXmlUtilityService: ICpmXmlUtilityService
     }
 
     /// <summary>
-    /// Safely purges inline Version attributes from MSBuild itemgroups utilizing transactional rollbacks on unexpected crashes.
+    /// Removes inline version attributes from package references in the specified project file.
     /// </summary>
-    /// <param name="projectFilePath">The destination project file path.</param>
-    public bool RemovePackageReferencesVersion(
-        string projectFilePath
-    )
+    /// <param name="projectFilePath">The target project file path.</param>
+    /// <returns>
+    /// <see langword="true"/> when at least one version attribute was removed;
+    /// otherwise, <see langword="false"/>.
+    /// </returns>
+    public bool RemovePackageReferencesVersion(string projectFilePath)
     {
-        if (string.IsNullOrWhiteSpace(projectFilePath)) throw new ArgumentException("Path cannot be empty.", nameof(projectFilePath));
-        if (!_fileSystem.File.Exists(projectFilePath)) return false;
+        if (string.IsNullOrWhiteSpace(projectFilePath))
+        {
+            throw new ArgumentException(
+                "Path cannot be empty.",
+                nameof(projectFilePath));
+        }
 
-        XDocument doc;
+        if (!_fileSystem.File.Exists(projectFilePath))
+        {
+            return false;
+        }
+
+        XDocument document;
+
         using (var readStream = _fileSystem.File.OpenRead(projectFilePath))
         {
-            doc = XDocument.Load(readStream);
+            document = XDocument.Load(readStream);
         }
 
-        if (doc.Root == null) return false;
+        if (document.Root is null)
+        {
+            return false;
+        }
 
-        var targets = doc.Descendants().Where(x => x.Name.LocalName == "PackageReference").ToList();
         var isModified = false;
 
-        foreach (var element in targets)
+        foreach (var packageReference in document
+            .Descendants()
+            .Where(static element =>
+                element.Name.LocalName == "PackageReference"))
         {
-            var attr = element.Attribute("Version");
-            if (attr != null)
+            var versionAttribute = packageReference.Attribute("Version");
+
+            if (versionAttribute is null)
             {
-                attr.Remove();
-                isModified = true;
+                continue;
             }
+
+            versionAttribute.Remove();
+            isModified = true;
         }
 
-        if (isModified)
+        if (!isModified)
         {
-            using var tx = new Utils.FileTransactionScope(_fileSystem, projectFilePath);
-            using var writeStream = _fileSystem.File.OpenWrite(projectFilePath);
-            writeStream.SetLength(0); // Clean slate write
-            doc.Save(writeStream);
-            tx.Commit(); // Commit only if execution reaches here smoothly
+            return false;
         }
 
-        return isModified;
+        using var writeStream = _fileSystem.File.Open(
+            projectFilePath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None);
+
+        document.Save(writeStream);
+
+        return true;
     }
 }
